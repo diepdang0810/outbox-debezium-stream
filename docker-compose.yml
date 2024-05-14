@@ -1,0 +1,115 @@
+version: "3.9"
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.1
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  broker:
+    image: confluentinc/cp-kafka:7.3.1
+    hostname: broker
+    container_name: broker
+    depends_on: [zookeeper]
+    ports:
+      - "29092:29092"
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+
+  debezium:
+    build:
+      context: ./debezium
+      dockerfile: Dockerfile
+    restart: always
+    container_name: debezium
+    hostname: debezium
+    depends_on: [postgres,broker]
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: broker:29092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: connect_configs
+      STATUS_STORAGE_TOPIC: connect_statuses
+      OFFSET_STORAGE_TOPIC: connect_offsets
+
+  postgres:
+    image: postgres:latest
+    restart: always
+    container_name: postgres
+    hostname: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: feed_local
+    command: ["postgres", "-c", "config_file=/etc/postgresql.conf"]
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+      - ./postgres/scripts:/docker-entrypoint-initdb.d
+      - ./postgres/postgresql.conf:/etc/postgresql.conf
+      - ./postgres/logs:/logs
+
+  console:
+    container_name: redpanda-console
+    image: docker.redpanda.com/redpandadata/console:v2.5.1
+    entrypoint: /bin/sh
+    command: -c 'echo "$$CONSOLE_CONFIG_FILE" > /tmp/config.yml; /app/console'
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["broker:29092"]
+    ports:
+      - 8089:8080
+    depends_on: [broker]
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.13.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+    ports:
+      - 9200:9200
+      - 9300:9300
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.13.0
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - 5601:5601
+    depends_on:
+      - elasticsearch
+
+  redis:
+      image: redis/redis-stack
+      container_name: redis_content
+      restart: always
+      env_file:
+        - ./.env
+      environment:
+        REDIS_PASSWORD: 123
+        REDIS_PORT_NUMBER: 6379
+      ports:
+        - 6379:6379

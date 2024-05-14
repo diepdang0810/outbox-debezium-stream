@@ -1,0 +1,5 @@
+spring:
+    kafka:
+        streams:
+            bootstrap-servers: "localhost:9092"
+            application-id: "content-stream-id"
